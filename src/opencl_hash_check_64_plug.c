@@ -9,12 +9,13 @@
 
 #if HAVE_OPENCL
 
+#include <math.h> // For calculating bitmap characteristics
+
 #include "options.h"
 #include "logger.h"
 #include "opencl_hash_check.h"
 #include "mask_ext.h"
 #include "misc.h"
-#include "int128.h" // 128-bit integer
 
 cl_uint ocl_hc_num_loaded_hashes;
 cl_uint *ocl_hc_hash_ids = NULL;
@@ -91,280 +92,283 @@ void ocl_hc_64_prepare_table(struct db_salt *salt)
 	}
 }
 
-static void prepare_bitmap_8(uint64_t bmp_sz, cl_uint **bitmap_ptr)
+/* Naive implementation for simplicity - we don't need speed. */
+static uint32_t log2_64(uint64_t val)
 {
-	unsigned int i;
-	MEM_FREE(*bitmap_ptr);
-	*bitmap_ptr = (cl_uint*) mem_calloc(bmp_sz >> 2, sizeof(cl_uint));
+        uint32_t res = 0;
 
-	for (i = 0; i < ocl_hc_num_loaded_hashes; i++) {
-		unsigned int bmp_idx;
-		unsigned int a = loaded_hashes[2 * i];
-		unsigned int b = loaded_hashes[2 * i + 1];
+        while (val >>= 1)
+                res++;
 
-		bmp_idx = b & (bmp_sz - 1);
-		(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = (b >> 8) & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = (b >> 16) & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) * 2 + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = (b >> 24) & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) * 3 + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = a & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) * 4 + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = (a >> 8) & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) * 5 + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = (a >> 16) & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) * 6 + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = (a >> 24) & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) * 7 + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-	}
+        return res;
 }
 
-static void prepare_bitmap_4(uint64_t bmp_sz, cl_uint **bitmap_ptr)
-{
-	unsigned int i;
-	MEM_FREE(*bitmap_ptr);
-	*bitmap_ptr = (cl_uint*) mem_calloc((bmp_sz >> 3), sizeof(cl_uint));
-
-	for (i = 0; i < ocl_hc_num_loaded_hashes; i++) {
-		unsigned int bmp_idx;
-		unsigned int a = loaded_hashes[2 * i];
-		unsigned int b = loaded_hashes[2 * i + 1];
-
-		bmp_idx = b & (bmp_sz - 1);
-		(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = (b >> 16) & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = a & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) * 2 + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = (a >> 16) & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) * 3 + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-	}
-}
-
-static void prepare_bitmap_2(uint64_t bmp_sz, cl_uint **bitmap_ptr)
-{
-	unsigned int i;
-	MEM_FREE(*bitmap_ptr);
-	*bitmap_ptr = (cl_uint*) mem_calloc((bmp_sz >> 4), sizeof(cl_uint));
-
-	for (i = 0; i < ocl_hc_num_loaded_hashes; i++) {
-		unsigned int bmp_idx;
-		unsigned int a = loaded_hashes[2 * i];
-		unsigned int b = loaded_hashes[2 * i + 1];
-
-		bmp_idx = b & (bmp_sz - 1);
-		(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
-
-		bmp_idx = a & (bmp_sz - 1);
-		(*bitmap_ptr)[(bmp_sz >> 5) + (bmp_idx >> 5)] |= (1U << (bmp_idx & 31));
-	}
-}
-
-static void prepare_bitmap_1(uint64_t bmp_sz, cl_uint **bitmap_ptr)
-{
-	unsigned int i;
-	MEM_FREE(*bitmap_ptr);
-	*bitmap_ptr = (cl_uint*) mem_calloc((bmp_sz >> 5), sizeof(cl_uint));
-
-	for (i = 0; i < ocl_hc_num_loaded_hashes; i++) {
-		unsigned int bmp_idx;
-		unsigned int b = loaded_hashes[2 * i + 1];	/* b is first we get when reversing steps */
-
-		bmp_idx = b & (bmp_sz - 1);
-		(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
-	}
-}
-
-#if JTR_HAVE_INT128
 /*
- * These are the naivest implementations, for simplicity - we don't need
- * them to be faster, and this pow128i will never need to do more than a
- * power of eight.  There is a faster version of powi() in charset.c and
- * several versions of log2() if you google "bit twiddling hacks".
+ * Rotate, for slicing k > 4.  The kernel will just shift instead,
+ * whenever it knows the end result is the same after the mask.
  */
-static uint128_t pow128i(uint64_t base, uint32_t raise)
+#define ror(a, b)	(((a) << (32 - (b))) | ((a) >> (b)))
+
+static void prepare_bitmap_k(struct db_salt *salt, uint64_t m, uint32_t k, uint32_t **bitmap_ptr)
 {
-	uint128_t result = 1;
+	const uint32_t mask = m - 1;
+	struct db_password *pw = salt->list;
+	uint32_t *hash;
 
-	while (raise--)
-		result *= base;
+	MEM_FREE(*bitmap_ptr);
+	*bitmap_ptr = mem_calloc(m >> 5, sizeof(uint32_t));
 
-	return result;
+	do {
+		if (!(hash = (unsigned int*)pw->binary))
+			continue;
+
+		uint32_t bmp_idx;
+		uint32_t a = hash[0];
+		uint32_t b = hash[1];
+		uint32_t c = hash[2];
+		uint32_t d = hash[3];
+
+		bmp_idx = b & mask;
+		(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
+
+		if (k >= 2) {
+			bmp_idx = a & mask;
+			(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
+		}
+		if (k >= 3) {
+			bmp_idx = c & mask;
+			(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
+		}
+		if (k >= 4) {
+			bmp_idx = d & mask;
+			(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
+		}
+		if (k >= 5) {
+			bmp_idx = ror(b, 16) & mask;
+			(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
+		}
+		if (k >= 6) {
+			bmp_idx = ror(a, 16) & mask;
+			(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
+		}
+		if (k >= 7) {
+			bmp_idx = ror(c, 16) & mask;
+			(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
+		}
+		if (k == 8) {
+			bmp_idx = ror(d, 16) & mask;
+			(*bitmap_ptr)[bmp_idx >> 5] |= (1U << (bmp_idx & 31));
+		}
+	} while ((pw = pw->next)) ;
 }
 
-static uint32_t log2_128(uint128_t val)
+#define RED "\x1b[0;31m"
+#define YEL "\x1b[0;33m"
+#define NRM "\x1b[0m"
+
+static double calc_k(double m, double n)
 {
-	uint32_t res = 0;
+	return MIN(8, MAX(1, round(m / n * log(2))));
+}
 
-	while (val >>= 1)
-		res++;
+static double calc_p(double m, double n, double k)
+{
+	if (!k)
+		k = calc_k(m, n);
 
-	return res;
+	return pow(1 - exp(-k / (m / n)), k);
+}
+
+#if 0
+/*
+ * Added for reference - these are not used.
+ */
+static double calc_n(double m, double k, double p)
+{
+	return ceil(m / (-k / log(1 - exp(log(p) / k))));
+}
+
+static double calc_m(double n, double p)
+{
+	uint m = ceil((n * log(p)) / log(1 / pow(2, log(2))));
+
+	if (m & (m - 1))
+		get_power_of_two(m);
+
+	return (double)m;
 }
 #endif
 
-char* ocl_hc_64_select_bitmap(unsigned int num_ld_hashes)
+char* ocl_hc_64_select_bitmap(struct db_salt *salt)
 {
 	static char kernel_params[200];
-	cl_ulong max_local_mem_sz_bytes = 0;
-	unsigned int cmp_steps = 2, use_local = 0;
+	char *env = NULL;
+	unsigned int k = 2, use_local = 0, n = salt->count;
+	uint64_t max_local_mem_sz = get_local_memory_size(gpu_id);
+	uint64_t max_global_mem_sz = get_max_mem_alloc_size(gpu_id);
+	double m;
 
-	HANDLE_CLERROR(clGetDeviceInfo(devices[gpu_id], CL_DEVICE_LOCAL_MEM_SIZE,
-	                               sizeof(cl_ulong), &max_local_mem_sz_bytes, 0),
-	               "failed to get CL_DEVICE_LOCAL_MEM_SIZE.");
+	if (max_global_mem_sz > 0x20000000)
+		max_global_mem_sz = 0x20000000;
+	else if (max_global_mem_sz & (max_global_mem_sz - 1)) {
+		get_power_of_two(max_global_mem_sz);
+		max_global_mem_sz >>= 1;
+	}
 
-	if (num_ld_hashes <= 5100) {
+	/* Buggy MacOS reports 64KB while it has only 32KB */
+	if (platform_apple(platform_id) && max_local_mem_sz == 65536)
+		max_local_mem_sz >>= 1;
+
+	if ((env = getenv("BITMAP_SIZE"))) {
+		m = bitmap_size_bits = (uint64_t)strtoull(env, NULL, 0);
+
+		if (bitmap_size_bits & (bitmap_size_bits - 1))
+			error_msg("\nError: BITMAP_SIZE=%s is not a log2 multiple\n", env);
+		else
+		if (bitmap_size_bits && bitmap_size_bits < 32)
+			error_msg("\nError: BITMAP_SIZE=%s - must be >= 32, or 0 to disable\n", env);
+		else if (bitmap_size_bits > 0x100000000ULL)
+			error_msg("\nError: BITMAP_SIZE=%s - max. allowed is 0x100000000\n", env);
+		else if (bitmap_size_bits / 8 > max_global_mem_sz)
+			error_msg("\nError: BITMAP_SIZE=%s - device's max. is 0x%"PRIx64"\n", env, max_global_mem_sz * 8);
+	} else
+	if ((env = getenv("BLOOM_K")) && strtoul(env, NULL, 0) == 0)
+		bitmap_size_bits = 0;
+	else
+	if (n <= 5100) {
 		if (amd_gcn_10(device_info[gpu_id]) || amd_vliw4(device_info[gpu_id]))
-			bitmap_size_bits = 512 * 1024;
-		else if (amd_gcn_11(device_info[gpu_id]) || max_local_mem_sz_bytes < 16384 || cpu(device_info[gpu_id]))
-			bitmap_size_bits = 256 * 1024;
-		else {
-			bitmap_size_bits = 32 * 1024;
-			cmp_steps = 4;
-			use_local = 1;
-		}
-	}
-	else if (num_ld_hashes <= 10100) {
-		if (amd_gcn_10(device_info[gpu_id]) || amd_vliw4(device_info[gpu_id]))
-			bitmap_size_bits = 512 * 1024;
-		else if (amd_gcn_11(device_info[gpu_id]) || max_local_mem_sz_bytes < 32768 || cpu(device_info[gpu_id]))
-			bitmap_size_bits = 256 * 1024;
-		else {
-			bitmap_size_bits = 64 * 1024;
-			cmp_steps = 4;
-			use_local = 1;
-		}
-	}
-	else if (num_ld_hashes <= 20100) {
-		if (amd_gcn_10(device_info[gpu_id]))
 			bitmap_size_bits = 1024 * 1024;
-		else if (amd_gcn_11(device_info[gpu_id]) || max_local_mem_sz_bytes < 32768)
+		else if (amd_gcn_11(device_info[gpu_id]) || max_local_mem_sz < 16384 || cpu(device_info[gpu_id]))
 			bitmap_size_bits = 512 * 1024;
-		else if (amd_vliw4(device_info[gpu_id]) || cpu(device_info[gpu_id])) {
-			bitmap_size_bits = 256 * 1024;
-			cmp_steps = 4;
-		}
-		else {
-			/* The 128-bit version had this as 32K and 8 steps */
-			bitmap_size_bits = 64 * 1024;
-			cmp_steps = 4;
-			use_local = 1;
-		}
-	}
-	else if (num_ld_hashes <= 250100)
-		if (max_local_mem_sz_bytes < 65536)
-			bitmap_size_bits = 2048 * 1024;
 		else {
 			bitmap_size_bits = 128 * 1024;
-			use_local = 1;
+			k = 4;
 		}
-	else if (num_ld_hashes <= 1100100) {
-		if (!amd_gcn_11(device_info[gpu_id]))
-			bitmap_size_bits = 4096 * 1024;
+	}
+	else if (n <= 10100) {
+		if (amd_gcn_10(device_info[gpu_id]) || amd_vliw4(device_info[gpu_id]))
+			bitmap_size_bits = 1024 * 1024;
+		else if (amd_gcn_11(device_info[gpu_id]) || max_local_mem_sz < 32768 || cpu(device_info[gpu_id]))
+			bitmap_size_bits = 512 * 1024;
+		else {
+			bitmap_size_bits = 256 * 1024;
+			k = 4;
+		}
+	}
+	else if (n <= 20100) {
+		if (amd_gcn_10(device_info[gpu_id]))
+			bitmap_size_bits = 2 * 1024 * 1024;
+		else if (amd_gcn_11(device_info[gpu_id]) || max_local_mem_sz < 32768)
+			bitmap_size_bits = 1024 * 1024;
+		else if (amd_vliw4(device_info[gpu_id]) || cpu(device_info[gpu_id])) {
+			bitmap_size_bits = 1024 * 1024;
+			k = 4;
+		}
+		else {
+			/* The 128-bit version had this as k=8, we might want k=4 */
+			bitmap_size_bits = 256 * 1024;
+			k = 8;
+		}
+	}
+	else if (n <= 250100)
+		if (max_local_mem_sz < 65536)
+			bitmap_size_bits = 4 * 1024 * 1024;
 		else
-			bitmap_size_bits = 2048 * 1024;
+			bitmap_size_bits = 256 * 1024;
+	else if (n <= 1100100) {
+		if (!amd_gcn_11(device_info[gpu_id]))
+			bitmap_size_bits = 8 * 1024 * 1024;
+		else
+			bitmap_size_bits = 4 * 1024 * 1024;
 	}
-	else if (num_ld_hashes <= 1500100) {
+	else if (n <= 1500100) {
 		bitmap_size_bits = 4096 * 1024 * 2;
-		cmp_steps = 1;
+		k = 1;
 	}
-	else if (num_ld_hashes <= 2700100) {
+	else if (n <= 2700100) {
 		bitmap_size_bits = 4096 * 1024 * 2 * 2;
-		cmp_steps = 1;
+		k = 1;
 	}
 	else {
-		cl_ulong mult = num_ld_hashes / 2700100;
-		cl_ulong buf_sz;
+		cl_ulong mult = n / 2700100;
 		bitmap_size_bits = 4096 * 4096;
 		get_power_of_two(mult);
 		bitmap_size_bits *= mult;
-		buf_sz = get_max_mem_alloc_size(gpu_id);
-		if (buf_sz & (buf_sz - 1)) {
-			get_power_of_two(buf_sz);
-			buf_sz >>= 1;
-		}
-		/*
-		 * This was a bug now fixed: 536870912 is 4G bits and would overflow
-		 * original kernel.  Also, we stay at 2 steps if we can afford it.
-		 */
-		if (buf_sz >= 536870912)
-			buf_sz = 536870912;
-		if ((bitmap_size_bits >> 3) > buf_sz)
-			bitmap_size_bits = buf_sz << 3;
-		if ((bitmap_size_bits >> 3) > (buf_sz / 2))
-			cmp_steps = 1;
+		if ((bitmap_size_bits / 8) > max_global_mem_sz)
+			bitmap_size_bits = max_global_mem_sz * 8;
 	}
 
-#if JTR_HAVE_INT128
+	m = bitmap_size_bits;
+
+	if (m && (env = getenv("BLOOM_K"))) {
+		k = (unsigned int)strtoul(env, NULL, 0);
+
+		if (k > 8)
+			error_msg("\nError: BLOOM_K=%s - must be 1..8, or 0 to disable\n", env);
+	}
+
+	/* Setting size or k to zero disables bitmap */
+	if (bitmap_size_bits < 32)
+		bitmap_size_bits = k = 0;
+	else if (!k)
+		bitmap_size_bits = 0;
+
+	if ((env = getenv("USE_LOCAL"))) {
+		use_local = (unsigned int)strtoul(env, NULL, 0);
+
+		if (use_local > 1U)
+			error_msg("\nError: USE_LOCAL=%s - must be 0 or 1\n", env);
+		else if (use_local && (bitmap_size_bits / 8) > max_local_mem_sz)
+			error_msg("\nError: BITMAP_SIZE=%"PRIu64" - device's local memory allows 0x%"PRIx64"\n",
+			          bitmap_size_bits, (uint64_t)max_local_mem_sz * 8);
+	}
+	else {
+		if (bitmap_size_bits)
+			use_local = ((bitmap_size_bits / 8) < max_local_mem_sz);
+		else
+			use_local = ((ocl_hc_offset_table_size + 2 * ocl_hc_hash_table_size) * sizeof(int) < max_local_mem_sz);
+	}
+
+	uint32_t bitmap_size_log = log2_64(bitmap_size_bits);
+
 	if (!ocl_any_test_running) {
-		uint128_t step_mask = pow128i(num_ld_hashes, cmp_steps);
-		uint128_t expected_fp = pow128i(bitmap_size_bits, cmp_steps) / step_mask;
-		uint32_t bits = expected_fp ? log2_128(expected_fp) : 64;
-		uint128_t mask = ((uint128_t)1 << bits) - 1;
+#define b_stats	"Bloom filter: n=%u, m=%"PRIu64" (%u-bit, %sB %s) k=%u, expected fp: 1/%.0f (p=%f).", \
+			(uint32_t)n, bitmap_size_bits, bitmap_size_log, human_prefix(bitmap_size_bits / 8), \
+			use_local ? "local": "global", k, 1.0 / calc_p(m, n, k), calc_p(m, n, k)
 
-#define print_stats	  \
-			"%u hashes: bitmap %ux%"PRIu64" bits, mask 0x%x, effectively %s%u%s bits (0x%.x%"PRIx64"), %sB%s", \
-				(uint32_t)num_ld_hashes, cmp_steps, bitmap_size_bits, (uint32_t)(bitmap_size_bits - 1), \
-				(expected_fp & (expected_fp - 1)) ? "~" : "", bits, expected_fp ? "" : "+", \
-				bits ? (uint32_t)(mask >> 64ULL) : 0, bits ? (uint64_t)mask : 0, \
-				human_prefix((bitmap_size_bits >> 3) * cmp_steps), use_local ? " (local)": ""
+#define h_stats	"%u hashes: Hash table in %s memory (%sB); bloom filter disabled.", \
+			(uint32_t)n, use_local ? "local" : "global", \
+			human_prefix((ocl_hc_offset_table_size + 2 * ocl_hc_hash_table_size) * sizeof(OFFSET_TABLE_WORD))
 
-		if (options.verbosity >= VERB_DEBUG) {
-			if (bits > 33)
-				fprintf(stderr, "Expecting \"no\" false positives\n");
-			else if (bits == 0)
-				fprintf(stderr, "Expecting all false positives\n");
+		if (options.verbosity /* >= VERB_DEBUG */) {
+			if (bitmap_size_bits)
+				fprintf(stderr, YEL b_stats);
 			else
-				fprintf(stderr, "Expecting 1/%"PRIu64" false positives\n", (uint64_t)expected_fp);
-
-			fprintf(stderr, print_stats);
-			fputc('\n', stderr);
+				fprintf(stderr, YEL h_stats);
+			fprintf(stderr, "\n" NRM);
 
 			fprintf(stderr,
 			        "Offset tbl %sB, Hash tbl %sB, Results %sB, Dupe bmp %sB, TOTAL on GPU: %sB\n",
 			        human_prefix(ocl_hc_offset_table_size * sizeof(OFFSET_TABLE_WORD)),
-			        human_prefix(ocl_hc_hash_table_size * sizeof(unsigned int) * 2),
+			        human_prefix(ocl_hc_hash_table_size * 2 * sizeof(unsigned int)),
 			        human_prefix((3 * ocl_hc_num_loaded_hashes + 1) * sizeof(cl_uint)),
-			        human_prefix((ocl_hc_hash_table_size/32 + 1) * sizeof(cl_uint)),
-			        human_prefix(ocl_hc_offset_table_size * sizeof(OFFSET_TABLE_WORD) + ocl_hc_hash_table_size * sizeof(unsigned int) * 2 + (3 * ocl_hc_num_loaded_hashes + 1) * sizeof(cl_uint) + (ocl_hc_hash_table_size/32 + 1) * sizeof(cl_uint) + (bitmap_size_bits >> 3) * cmp_steps));
+			        human_prefix((ocl_hc_hash_table_size / 32 + 1) * sizeof(cl_uint)),
+			        human_prefix((ocl_hc_offset_table_size + ocl_hc_hash_table_size * 2 + 3 * ocl_hc_num_loaded_hashes + 1 + ocl_hc_hash_table_size / 32 + 1) * sizeof(cl_uint) + (bitmap_size_bits / 8)));
 		}
 
-		log_event(print_stats);
+		if (bitmap_size_bits)
+			log_event(b_stats);
+		else
+			log_event(h_stats);
 	}
-#endif
 
-	if (cmp_steps == 1)
-		prepare_bitmap_1(bitmap_size_bits, &bitmaps);
-	else if (cmp_steps == 2)
-		prepare_bitmap_2(bitmap_size_bits, &bitmaps);
-	else if (cmp_steps == 4)
-		prepare_bitmap_4(bitmap_size_bits, &bitmaps);
+	if (bitmap_size_bits)
+		prepare_bitmap_k(salt, bitmap_size_bits, k, &bitmaps);
 	else
-		prepare_bitmap_8(bitmap_size_bits, &bitmaps);
+		MEM_FREE(bitmaps);
 
-	/*
-	 * Much better speed seen on Macbook Pro with GT 650M. Not sure why -
-	 * or what we should actually test for.
-	 */
-	if (platform_apple(platform_id) && gpu_nvidia(device_info[gpu_id]))
-		use_local = 0;
-
-	sprintf(kernel_params, "-D SELECT_CMP_STEPS=%u -D BITMAP_MASK=0x%xU -D USE_LOCAL_BITMAPS=%u",
-	        cmp_steps, (uint32_t)(bitmap_size_bits - 1), use_local);
-
-	bitmap_size_bits *= cmp_steps;
+	sprintf(kernel_params,
+	        "-D BLOOM_K=%u -D BITMAP_SIZE_LOG=%u%s", k, bitmap_size_log, use_local ? " -D USE_LOCAL" : "");
 
 	return kernel_params;
 }
@@ -372,18 +376,15 @@ char* ocl_hc_64_select_bitmap(unsigned int num_ld_hashes)
 void ocl_hc_64_crobj(cl_kernel kernel)
 {
 	cl_ulong max_alloc_size_bytes = 0;
-	cl_ulong cache_size_bytes = 0;
 
 	HANDLE_CLERROR(clGetDeviceInfo(devices[gpu_id], CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(cl_ulong), &max_alloc_size_bytes, 0), "failed to get CL_DEVICE_MAX_MEM_ALLOC_SIZE.");
-	HANDLE_CLERROR(clGetDeviceInfo(devices[gpu_id], CL_DEVICE_GLOBAL_MEM_CACHE_SIZE, sizeof(cl_ulong), &cache_size_bytes, 0), "failed to get CL_DEVICE_GLOBAL_MEM_CACHE_SIZE.");
 
 	if (max_alloc_size_bytes & (max_alloc_size_bytes - 1)) {
 		get_power_of_two(max_alloc_size_bytes);
 		max_alloc_size_bytes >>= 1;
 	}
-	if (max_alloc_size_bytes >= 536870912) max_alloc_size_bytes = 536870912;
-
-	if (!cache_size_bytes) cache_size_bytes = 1024;
+	if (max_alloc_size_bytes >= 0x20000000)
+		max_alloc_size_bytes = 0x20000000;
 
 	zero_buffer = (cl_uint*) mem_calloc(ocl_hc_hash_table_size/32 + 1, sizeof(cl_uint));
 
@@ -403,7 +404,8 @@ void ocl_hc_64_crobj(cl_kernel kernel)
 	HANDLE_CLERROR(ret_code, "Error creating buffer argument buffer_hash_table.");
 
 	HANDLE_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_hash_ids_64, CL_TRUE, 0, sizeof(cl_uint), zero_buffer, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_hash_ids_64.");
-	HANDLE_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_bitmaps, CL_TRUE, 0, (size_t)(bitmap_size_bits >> 3), bitmaps, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_bitmaps.");
+	if (bitmap_size_bits)
+		HANDLE_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_bitmaps, CL_TRUE, 0, (size_t)(bitmap_size_bits / 8), bitmaps, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_bitmaps.");
 	HANDLE_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_offset_table, CL_TRUE, 0, sizeof(OFFSET_TABLE_WORD) * ocl_hc_offset_table_size, offset_table, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_offset_table.");
 	HANDLE_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_hash_table, CL_TRUE, 0, sizeof(cl_uint) * ocl_hc_hash_table_size * 2, bt_hash_table_64, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_hash_table.");
 
@@ -414,14 +416,14 @@ void ocl_hc_64_crobj(cl_kernel kernel)
 	HANDLE_CLERROR(clSetKernelArg(kernel, 8, sizeof(buffer_bitmap_dupe), (void*) &buffer_bitmap_dupe), "Error setting argument 9.");
 }
 
-int ocl_hc_64_extract_info(struct db_salt *salt, void (*set_kernel_args)(void), void (*set_kernel_args_kpc)(void), void (*init_kernel)(unsigned int, char*), size_t gws, size_t *lws, int *pcount)
+int ocl_hc_64_extract_info(struct db_salt *salt, void (*set_kernel_args)(void), void (*set_kernel_args_kpc)(void), void (*init_kernel)(char*), size_t gws, size_t *lws, int *pcount)
 {
 	if (salt != NULL && salt->count > 4500 &&
 		(ocl_hc_num_loaded_hashes - ocl_hc_num_loaded_hashes / 10) > salt->count) {
 		size_t old_ot_sz_bytes, old_ht_sz_bytes;
 
 		ocl_hc_64_prepare_table(salt);
-		init_kernel(salt->count, ocl_hc_64_select_bitmap(salt->count));
+		init_kernel(ocl_hc_64_select_bitmap(salt));
 
 		BENCH_CLERROR(clGetMemObjectInfo(buffer_offset_table, CL_MEM_SIZE, sizeof(size_t), &old_ot_sz_bytes, NULL), "failed to query buffer_offset_table.");
 
@@ -446,7 +448,8 @@ int ocl_hc_64_extract_info(struct db_salt *salt, void (*set_kernel_args)(void), 
 			BENCH_CLERROR(ret_code, "Error creating buffer argument buffer_hash_table.");
 		}
 
-		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_bitmaps, CL_TRUE, 0, (bitmap_size_bits >> 3), bitmaps, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_bitmaps.");
+		if (bitmap_size_bits)
+			BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_bitmaps, CL_TRUE, 0, (bitmap_size_bits / 8), bitmaps, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_bitmaps.");
 		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_offset_table, CL_TRUE, 0, sizeof(OFFSET_TABLE_WORD) * ocl_hc_offset_table_size, offset_table, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_offset_table.");
 		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_hash_table, CL_TRUE, 0, sizeof(cl_uint) * ocl_hc_hash_table_size * 2, bt_hash_table_64, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_hash_table.");
 

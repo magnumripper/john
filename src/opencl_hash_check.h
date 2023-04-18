@@ -7,8 +7,8 @@ extern unsigned int ocl_hc_hash_table_size, ocl_hc_offset_table_size;
 
 extern void ocl_hc_64_init(struct fmt_main *_self);
 extern void ocl_hc_64_prepare_table(struct db_salt *salt);
-extern char* ocl_hc_64_select_bitmap(unsigned int num_ld_hashes);
-extern int ocl_hc_64_extract_info(struct db_salt *, void (*)(void), void (*)(void), void (*)(unsigned int, char *), size_t, size_t *, int *);
+extern char* ocl_hc_64_select_bitmap(struct db_salt *salt);
+extern int ocl_hc_64_extract_info(struct db_salt *, void (*)(void), void (*)(void), void (*)(char *), size_t, size_t *, int *);
 extern void ocl_hc_64_crobj(cl_kernel kernel);
 extern void ocl_hc_64_rlobj(void);
 extern int ocl_hc_64_cmp_all(void *binary, int count);

@@ -354,16 +354,29 @@ static unsigned int create_tables()
 #endif
 	unsigned int trigger;
 	long double done = 0;
-	struct timeval t;
 
 	if (bt_malloc((void **)&store_hash_modulo_table_sz, offset_data[0].collisions * sizeof(unsigned int)))
 		bt_error("Failed to allocate memory: store_hash_modulo_table_sz.");
 	if (bt_malloc((void **)&hash_table_idxs, offset_data[0].collisions * sizeof(unsigned int)))
 		bt_error("Failed to allocate memory: hash_table_idxs.");
 
-	gettimeofday(&t, NULL);
+#if 1
+	/*
+	 * We use a static seed to get consistent testing - actual
+	 * randomness is not needed for this application.
+	 */
+	static int seeded;
 
+	if (!seeded) {
+		seedMT(0xcafebabe);
+		seeded = 1;
+	}
+#else
+	struct timeval t;
+
+	gettimeofday(&t, NULL);
 	seedMT(t.tv_sec + t.tv_usec);
+#endif
 
 	i = 0;
 	trigger = 0;

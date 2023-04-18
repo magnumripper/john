@@ -63,7 +63,7 @@ john_register_one(&fmt_opencl_NT_long);
 #define BUFSIZE             ((UTF8_MAX_LENGTH + 3) / 4 * 4)
 #define AUTOTUNE_LENGTH     8
 #define CIPHERTEXT_LENGTH   32
-#define BINARY_SIZE         8
+#define BINARY_SIZE         16
 #define BINARY_ALIGN        sizeof(cl_uint)
 #define SALT_SIZE           0
 #define SALT_ALIGN          1
@@ -328,7 +328,7 @@ static void done(void)
 	}
 }
 
-static void init_kernel(unsigned int num_ld_hashes, char *bitmap_para)
+static void init_kernel(char *bitmap_para)
 {
 	char build_opts[5000];
 	int i;
@@ -366,7 +366,7 @@ static void init_kernel(unsigned int num_ld_hashes, char *bitmap_para)
 	"-D LOC_3=%d"
 #endif
 	,ocl_hc_offset_table_size, ocl_hc_hash_table_size,
-	num_ld_hashes, mask_int_cand.num_int_cand, bitmap_para, mask_gpu_is_static,
+	ocl_hc_num_loaded_hashes, mask_int_cand.num_int_cand, bitmap_para, mask_gpu_is_static,
 	(unsigned long long)const_cache_size, cp_id2macro(options.target_enc),
 	options.internal_cp == UTF_8 ? cp_id2macro(ENC_RAW) :
 	cp_id2macro(options.internal_cp), utf16len,
@@ -649,9 +649,8 @@ static void reset(struct db_main *db)
 	release_base_clobj();
 	release_clobj();
 
-	ocl_hc_num_loaded_hashes = db->salts->count;
 	ocl_hc_64_prepare_table(db->salts);
-	init_kernel(ocl_hc_num_loaded_hashes, ocl_hc_64_select_bitmap(ocl_hc_num_loaded_hashes));
+	init_kernel(ocl_hc_64_select_bitmap(db->salts));
 
 	create_base_clobj();
 
@@ -700,6 +699,28 @@ static int cmp_exact(char *source, int index)
 	return result;
 }
 
+static char *source(char *source, void *binary)
+{
+	static char out[FORMAT_TAG_LEN + CIPHERTEXT_LENGTH + 1] = FORMAT_TAG;
+	uint32_t b[4];
+	char *p = &out[FORMAT_TAG_LEN];
+	int i, j;
+
+	memcpy(b, binary, sizeof(b));
+
+	md4_unreverse(b);
+
+#if !ARCH_LITTLE_ENDIAN
+	alter_endianity(b, 16);
+#endif
+
+	for (i = 0; i < 4; i++)
+		for (j = 0; j < 8; j++)
+			*p++ = itoa16[(b[i] >> ((j ^ 1) * 4)) & 0xf];
+
+	return out;
+}
+
 struct fmt_main fmt_opencl_NT = {
 	{
 		FORMAT_LABEL,
@@ -729,7 +750,7 @@ struct fmt_main fmt_opencl_NT = {
 		get_binary,
 		fmt_default_salt,
 		{ NULL },
-		fmt_default_source,
+		source,
 		{
 			binary_hash_0,
 			binary_hash_1,
@@ -790,7 +811,7 @@ struct fmt_main fmt_opencl_NT_long = {
 		get_binary,
 		fmt_default_salt,
 		{ NULL },
-		fmt_default_source,
+		source,
 		{
 			binary_hash_0,
 			binary_hash_1,

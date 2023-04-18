@@ -1,23 +1,14 @@
 /*
  * NTLM kernel (OpenCL 1.2 conformant)
  *
- * Written by Alain Espinosa <alainesp at gmail.com> in 2010 and modified by
- * Samuele Giovanni Tonon in 2011. No copyright is claimed, and
- * the software is hereby placed in the public domain.
- * In case this attempt to disclaim copyright and place the software in the
- * public domain is deemed null and void, then the software is
+ * This software is
  * Copyright (c) 2010 Alain Espinosa
  * Copyright (c) 2011 Samuele Giovanni Tonon
- * Copyright (c) 2015 Sayantan Datta <sdatta at openwall.com>
+ * Copyright (c) 2015 Sayantan Datta <std2048 at gmail dot com>
  * Copyright (c) 2015-2023 magnum
  * and it is hereby released to the general public under the following terms:
- *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted.
- *
- * There's ABSOLUTELY NO WARRANTY, express or implied.
- *
- * (This is a heavily cut-down "BSD license".)
  */
 
 #define AMD_PUTCHAR_NOCAST
@@ -26,7 +17,7 @@
 #include "opencl_unicode.h"
 #include "opencl_mask.h"
 
-//Init values
+// Init values
 #define INIT_A 0x67452301
 #define INIT_B 0xefcdab89
 #define INIT_C 0x98badcfe
@@ -39,16 +30,26 @@
  * If enabled, will check bitmap after calculating just the
  * first 32 bits of 'b' (does not apply to nt-long-opencl).
  */
-#define EARLY_REJECT	1
+#define EARLY_REJECT	(BLOOM_K == 1 && PLAINTEXT_LENGTH <= 27)
 
-#if USE_LOCAL_BITMAPS
+#if USE_LOCAL && !BITMAP_SIZE_LOG
+#define HASH_TABLE_TYPE	__local
+#else
+#define HASH_TABLE_TYPE	__global
+#endif
+
+#if USE_LOCAL && BITMAP_SIZE_LOG
 #define BITMAPS_TYPE	__local
 #else
 #define BITMAPS_TYPE	__global
 #endif
 
-#define USE_CONST_CACHE \
-	(CONST_CACHE_SIZE >= (NUM_INT_KEYS * 4))
+#if BITMAP_SIZE_LOG
+#define BITMAP_MASK	(0xffffffffU >> (32 - BITMAP_SIZE_LOG))
+#define BLOOM_M	(1U << BITMAP_SIZE_LOG)
+#endif
+
+#define USE_CONST_CACHE	(CONST_CACHE_SIZE >= (NUM_INT_KEYS * 4))
 
 #if USE_CONST_CACHE
 #define CACHE_TYPE	__constant
@@ -56,8 +57,11 @@
 #define CACHE_TYPE	__global
 #endif
 
-/* This handles an input of 0xffffffffU correctly */
-#define BITMAP_SHIFT ((BITMAP_MASK >> 5) + 1)
+/*
+ * Rotate, for slicing k > 4.  For small enough bitmasks
+ * we just shift, in case that's cheaper.
+ */
+#define ror(a, b)	((BITMAP_SIZE_LOG > (32 - (b))) ? rotate(a, 32U - (b)) : (a >> b))
 
 inline int nt_crypt(uint *hash, uint *nt_buffer, uint md4_size, BITMAPS_TYPE uint *bitmaps)
 {
@@ -138,27 +142,21 @@ inline int nt_crypt(uint *hash, uint *nt_buffer, uint md4_size, BITMAPS_TYPE uin
 	hash[2] += MD4_H (hash[3], hash[0], hash[1]) + nt_buffer[5]  + SQRT_3; hash[2] = rotate(hash[2], 11u);
 	hash[1] += MD4_H2(hash[2], hash[3], hash[0]) + nt_buffer[13];
 
-#if EARLY_REJECT && PLAINTEXT_LENGTH <= 27
-	uint bitmap_index = hash[1] & BITMAP_MASK;
-	uint tmp = (bitmaps[BITMAP_SHIFT * 0 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-#if SELECT_CMP_STEPS == 8
-	bitmap_index = (hash[1] >> 8) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 1 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[1] >> 16) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 2 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[1] >> 24) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 3 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-#elif SELECT_CMP_STEPS == 4
-	bitmap_index = (hash[1] >> 16) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 1 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-#endif	/* SELECT_CMP_STEPS == 8 */
+#if BITMAP_SIZE_LOG && EARLY_REJECT
+	uint bitmap_index = bitmap_index = hash[1] & BITMAP_MASK;
+	uint tmp = (bitmaps[bitmap_index >> 5] >> (bitmap_index & 31)) & 1U;
+
 	if (likely(!tmp))
 		return 0;
-#endif	/* EARLY_REJECT && PLAINTEXT_LENGTH <= 27 */
+#endif
 
 	uint hash1 = hash[1] + SQRT_3; hash1 = rotate(hash1, 15u);
 
 	hash[0] += MD4_H (hash[3], hash[2], hash1  ) + nt_buffer[3]  + SQRT_3; hash[0] = rotate(hash[0], 3u );
+#if BLOOM_K > 2
+	hash[3] +=        MD4_H2(hash[2], hash1,   hash[0]) + nt_buffer[11] + SQRT_3; hash[3] = rotate(hash[3], 9u );
+	hash[2] +=        MD4_H (hash1,   hash[0], hash[3]) + nt_buffer[7]  + SQRT_3; hash[2] = rotate(hash[2], 11u);
+#endif
 
 #if PLAINTEXT_LENGTH > 27
 	if (likely(md4_size <= (27 << 4)))
@@ -167,8 +165,10 @@ inline int nt_crypt(uint *hash, uint *nt_buffer, uint md4_size, BITMAPS_TYPE uin
 	/*
 	 * Complete the first of a multi-block MD4 (reversing steps not possible).
 	 */
+#if BLOOM_K <= 2
 	hash[3] +=        MD4_H2(hash[2], hash1,   hash[0]) + nt_buffer[11] + SQRT_3; hash[3] = rotate(hash[3], 9u );
 	hash[2] +=        MD4_H (hash1,   hash[0], hash[3]) + nt_buffer[7]  + SQRT_3; hash[2] = rotate(hash[2], 11u);
+#endif
 	hash[1] = hash1 + MD4_H2(hash[2], hash[3], hash[0]) + nt_buffer[15] + SQRT_3; hash[1] = rotate(hash[1], 15u);
 	hash[0] += INIT_A;
 	hash[1] += INIT_B;
@@ -372,8 +372,8 @@ inline uint prepare_key(__global uint *key, uint length, uint *nt_buffer)
 inline void cmp_final(uint gid,
                       uint iter,
                       uint *hash,
-                      __global uint *offset_table,
-                      __global uint *hash_table,
+                      HASH_TABLE_TYPE uint *offset_table,
+                      HASH_TABLE_TYPE uint *hash_table,
                       volatile __global uint *output,
                       volatile __global uint *bitmap_dupe)
 {
@@ -403,60 +403,48 @@ inline void cmp(uint gid,
                 uint iter,
                 uint *hash,
                 BITMAPS_TYPE uint *bitmaps,
-                __global uint *offset_table,
-                __global uint *hash_table,
+                HASH_TABLE_TYPE uint *offset_table,
+                HASH_TABLE_TYPE uint *hash_table,
                 volatile __global uint *output,
                 volatile __global uint *bitmap_dupe)
 {
+#if BITMAP_SIZE_LOG
 	uint bitmap_index, tmp = 1;
 
-#if SELECT_CMP_STEPS == 8
-#if !EARLY_REJECT || PLAINTEXT_LENGTH > 27
+#if !EARLY_REJECT
 	bitmap_index = hash[1] & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 0 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[1] >> 8) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 1 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[1] >> 16) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 2 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[1] >> 24) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 3 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
+	tmp &= (bitmaps[bitmap_index >> 5] >> (bitmap_index & 31)) & 1U;
 #endif
+#if BLOOM_K >= 2
 	bitmap_index = hash[0] & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 4 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[0] >> 8) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 5 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[0] >> 16) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 6 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[0] >> 24) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 7 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-
-#elif SELECT_CMP_STEPS == 4
-#if !EARLY_REJECT || PLAINTEXT_LENGTH > 27
-	bitmap_index = hash[1] & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 0 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[1] >> 16) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 1 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
+	tmp &= (bitmaps[bitmap_index >> 5] >> (bitmap_index & 31)) & 1U;
 #endif
-	bitmap_index = hash[0] & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 2 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-	bitmap_index = (hash[0] >> 16) & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 3 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-
-#elif SELECT_CMP_STEPS == 2
-#if !EARLY_REJECT || PLAINTEXT_LENGTH > 27
-	bitmap_index = hash[1] & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 0 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
+#if BLOOM_K >= 3
+	bitmap_index = hash[2] & BITMAP_MASK;
+	tmp &= (bitmaps[bitmap_index >> 5] >> (bitmap_index & 31)) & 1U;
 #endif
-	bitmap_index = hash[0] & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 1 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-
-#elif !EARLY_REJECT || PLAINTEXT_LENGTH > 27 /* SELECT_CMP_STEPS == 1 */
-	bitmap_index = hash[1] & BITMAP_MASK;
-	tmp &= (bitmaps[BITMAP_SHIFT * 0 + (bitmap_index >> 5)] >> (bitmap_index & 31)) & 1U;
-
-#endif	/* SELECT_CMP_STEPS == 8 */
-
+#if BLOOM_K >= 4
+	bitmap_index = hash[3] & BITMAP_MASK;
+	tmp &= (bitmaps[bitmap_index >> 5] >> (bitmap_index & 31)) & 1U;
+#endif
+#if BLOOM_K >= 5
+	bitmap_index = ror(hash[1], 16) & BITMAP_MASK;
+	tmp &= (bitmaps[bitmap_index >> 5] >> (bitmap_index & 31)) & 1U;
+#endif
+#if BLOOM_K >= 6
+	bitmap_index = ror(hash[0], 16) & BITMAP_MASK;
+	tmp &= (bitmaps[bitmap_index >> 5] >> (bitmap_index & 31)) & 1U;
+#endif
+#if BLOOM_K >= 7
+	bitmap_index = ror(hash[2], 16) & BITMAP_MASK;
+	tmp &= (bitmaps[bitmap_index >> 5] >> (bitmap_index & 31)) & 1U;
+#endif
+#if BLOOM_K == 8
+	bitmap_index = ror(hash[3], 16) & BITMAP_MASK;
+	tmp &= (bitmaps[bitmap_index >> 5] >> (bitmap_index & 31)) & 1U;
+#endif
 	if (tmp)
+#endif	/* BITMAP_SIZE_LOG */
 		cmp_final(gid, iter, hash, offset_table, hash_table, output, bitmap_dupe);
 }
 
@@ -514,19 +502,42 @@ __kernel void nt(__global uint *keys,
 #define GPU_LOC_3 LOC_3
 #endif
 
-#if USE_LOCAL_BITMAPS
+#if USE_LOCAL && !BITMAP_SIZE_LOG
 	uint lid = get_local_id(0);
 	uint lws = get_local_size(0);
-	__local uint s_bitmaps[BITMAP_SHIFT * SELECT_CMP_STEPS];
+	__local uint s_offset_table[OFFSET_TABLE_SIZE];
+	__local uint s_hash_table[HASH_TABLE_SIZE * 2];
 
-	for (i = lid; i < BITMAP_SHIFT * SELECT_CMP_STEPS; i+= lws)
+	for (i = lid; i < sizeof(s_offset_table) / sizeof(uint); i += lws)
+		s_offset_table[i] = offset_table[i];
+
+	for (i = lid; i < sizeof(s_hash_table) / sizeof(uint); i += lws)
+		s_hash_table[i] = hash_table[i];
+
+	barrier(CLK_LOCAL_MEM_FENCE);
+
+#define OFFSET_TABLE s_offset_table
+#define HASH_TABLE   s_hash_table
+
+#else
+#define OFFSET_TABLE offset_table
+#define HASH_TABLE   hash_table
+#endif
+
+#if USE_LOCAL && BITMAP_SIZE_LOG
+	uint lid = get_local_id(0);
+	uint lws = get_local_size(0);
+	__local uint s_bitmaps[BLOOM_M >> 5];
+
+	for (i = lid; i < sizeof(s_bitmaps) / sizeof(uint); i += lws)
 		s_bitmaps[i] = bitmaps[i];
 
 	barrier(CLK_LOCAL_MEM_FENCE);
 
-#define BITMAPS	s_bitmaps
+#define BITMAPS	     s_bitmaps
+
 #else
-#define BITMAPS	bitmaps
+#define BITMAPS	     bitmaps
 #endif
 
 	keys += base >> 7;
@@ -556,7 +567,8 @@ __kernel void nt(__global uint *keys,
 #endif
 #endif
 #endif
+
 		if (nt_crypt(hash, nt_buffer, md4_size, BITMAPS))
-			cmp(gid, i, hash, BITMAPS, offset_table, hash_table, out_hash_ids, bitmap_dupe);
+			cmp(gid, i, hash, BITMAPS, OFFSET_TABLE, HASH_TABLE, out_hash_ids, bitmap_dupe);
 	}
 }
