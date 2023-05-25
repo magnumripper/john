@@ -199,6 +199,8 @@ static double calc_m(double n, double p)
 }
 #endif
 
+#define NEW_ALGO	1
+
 char* ocl_hc_64_select_bitmap(struct db_salt *salt)
 {
 	static char kernel_params[200];
@@ -207,6 +209,14 @@ char* ocl_hc_64_select_bitmap(struct db_salt *salt)
 	uint64_t max_local_mem_sz = get_local_memory_size(gpu_id);
 	uint64_t max_global_mem_sz = get_max_mem_alloc_size(gpu_id);
 	double m;
+#if NEW_ALGO
+	unsigned int old_k;
+	double target_p;
+
+#define FITS_LOCAL(m)	((m) < (max_local_mem_sz * 8))
+#define FITS_GLOBAL(m)	((m) < (max_global_mem_sz * 8))
+
+#endif
 
 	if (max_global_mem_sz > 0x20000000)
 		max_global_mem_sz = 0x20000000;
@@ -218,6 +228,20 @@ char* ocl_hc_64_select_bitmap(struct db_salt *salt)
 	/* Buggy MacOS reports 64KB while it has only 32KB */
 	if (platform_apple(platform_id) && max_local_mem_sz == 65536)
 		max_local_mem_sz >>= 1;
+
+#if NEW_ALGO
+	/*
+	 * nvidia is less hurt by FP than AMD, but benefits more from using
+	 * local.
+	 *
+	 * nvidia sometimes benefit from disabling bitmap and have PHT in
+	 * local memory.  AMD never does.
+	 */
+	if (n < 65536)
+		target_p = 1.0 / 128;
+	else
+		target_p = 1.0 / 64;
+#endif
 
 	if ((env = getenv("BITMAP_SIZE"))) {
 		m = bitmap_size_bits = (uint64_t)strtoull(env, NULL, 0);
@@ -232,6 +256,39 @@ char* ocl_hc_64_select_bitmap(struct db_salt *salt)
 		else if (bitmap_size_bits / 8 > max_global_mem_sz)
 			error_msg("\nError: BITMAP_SIZE=%s - device's max. is 0x%"PRIx64"\n", env, max_global_mem_sz * 8);
 	} else
+#if NEW_ALGO
+	{
+#if 1
+		bitmap_size_bits = max_local_mem_sz * 8;
+		if (bitmap_size_bits & (bitmap_size_bits - 1)) {
+			get_power_of_two(bitmap_size_bits);
+			bitmap_size_bits >>= 1;
+		}
+		m = bitmap_size_bits;
+		old_k = k = calc_k(m, n);
+		if (!ocl_any_test_running)
+			fprintf(stderr, "Init: n=%u m=%.0f: k=%u p=1/%.0f\n", n, m, k, 1 / calc_p(m, n, k));
+		do {
+			k = calc_k(m, n);
+			while (k > 1 && calc_p(m, n, k - 1) <= target_p)
+				k--;
+		} while (calc_p(m / 2, n, 0) <= target_p && (m = bitmap_size_bits /= 2));
+
+		if (!ocl_any_test_running && k != old_k)
+			fprintf(stderr, "Decreased to m=%.0f: k=%u p=1/%.0f\n", m, k, 1 / calc_p(m, n, k));
+		if (m < 32)
+			k = m = bitmap_size_bits = 0;
+#else
+		m = MAX(32, calc_m(n, target_p));
+		bitmap_size_bits = MIN(m, max_global_mem_sz * 8);
+		if (bitmap_size_bits & (bitmap_size_bits - 1)) {
+			get_power_of_two(bitmap_size_bits);
+			bitmap_size_bits >>= 1;
+		}
+		m = bitmap_size_bits;
+#endif
+	}
+#else
 	if ((env = getenv("BLOOM_K")) && strtoul(env, NULL, 0) == 0)
 		bitmap_size_bits = 0;
 	else
@@ -297,6 +354,7 @@ char* ocl_hc_64_select_bitmap(struct db_salt *salt)
 		if ((bitmap_size_bits / 8) > max_global_mem_sz)
 			bitmap_size_bits = max_global_mem_sz * 8;
 	}
+#endif
 
 	m = bitmap_size_bits;
 
@@ -306,6 +364,33 @@ char* ocl_hc_64_select_bitmap(struct db_salt *salt)
 		if (k > 8)
 			error_msg("\nError: BLOOM_K=%s - must be 1..8, or 0 to disable\n", env);
 	}
+#if NEW_ALGO
+	else if (bitmap_size_bits) {
+		old_k = k;
+		while (calc_p(2 * m, n, 0) > (FITS_LOCAL(m) ? 1.0 / 64 : target_p) && FITS_GLOBAL(2 * m)) {
+			m = bitmap_size_bits *= 2;
+			k = MIN(8, MAX(1, calc_k(m, n)));
+		};
+
+		if (!ocl_any_test_running && old_k != k)
+			fprintf(stderr, "Target is 1/%.0f, trying m=%.0f k=%u p=1/%.0f\n", 1 / target_p, m, k, 1 / calc_p(m, n, k));
+
+		/* Decrease too good FP ratio (due to rounding up m to nearest log2) */
+		while (k > 8 || (k > 1 && calc_p(m, n, k) < target_p && calc_p(m, n, k - 1) <= target_p))
+			k--;
+
+		if (old_k != k && !ocl_any_test_running)
+			fprintf(stderr, "Decreased to m=%.0f k=%u p=1/%.0f\n", m, k, 1 / calc_p(m, n, k));
+
+		old_k = k;
+		/* Increase too poor FP ratio or, k out of bounds */
+		while (!k || (k < 8 && calc_p(m, n, k) > target_p && calc_p(m, n, k + 1) <= calc_p(m, n, k)))
+			k++;
+
+		if (old_k != k && !ocl_any_test_running)
+			fprintf(stderr, "Increased to m=%.0f k=%u p=1/%.0f\n", m, k, 1 / calc_p(m, n, k));
+	}
+#endif
 
 	/* Setting size or k to zero disables bitmap */
 	if (bitmap_size_bits < 32)
