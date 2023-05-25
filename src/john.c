@@ -1925,6 +1925,9 @@ static void john_done(void)
 						"Session stopped (max candidates reached)";
 			}
 
+			if (john_max_cands || aborted_by_timer)
+				event_abort = 0;
+
 			/* We already printed to stderr from signals.c */
 			log_event("%s", abort_msg);
 		} else if (children_ok) {
