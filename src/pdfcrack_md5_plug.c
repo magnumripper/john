@@ -1,6 +1,7 @@
 /**
- * Copyright (C) 2006 Henning Norén
- * Copyright (C) 1996-2005 Glyph & Cog, LLC.
+ * Copyright (c) 2024 magnum
+ * Copyright (c) 2006 Henning Norén
+ * Copyright (c) 1996-2005 Glyph & Cog, LLC.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License

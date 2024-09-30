@@ -1,5 +1,6 @@
 /**
- * Copyright (C) 2006 Henning Norén
+ * Copyright (c) 2024 magnum
+ * Copyright (c) 2006 Henning Norén
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -17,13 +18,12 @@
  * USA.
  */
 
-#ifndef _MD5_H_
-#define _MD5_H_
+#ifndef __PDFCRACK_MD5_
+#define __PDFCRACK_MD5_
 
 #include <stdint.h>
-
 
 extern void md5x50_40(uint8_t * msg);
 extern void md5x50_128(uint8_t * msg);
 
-#endif /** _MD5_H_ */
+#endif /** __PDFCRACK_MD5_ */
