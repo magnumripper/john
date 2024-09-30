@@ -20,14 +20,14 @@ inline void _phs512_preproc(__global const ulong *key, uint keylen,
 	ulong W[16];
 	ulong A, B, C, D, E, F, G, H, t;
 
-	A = SHA2_INIT_A;
-	B = SHA2_INIT_B;
-	C = SHA2_INIT_C;
-	D = SHA2_INIT_D;
-	E = SHA2_INIT_E;
-	F = SHA2_INIT_F;
-	G = SHA2_INIT_G;
-	H = SHA2_INIT_H;
+	A = SHA512_INIT_A;
+	B = SHA512_INIT_B;
+	C = SHA512_INIT_C;
+	D = SHA512_INIT_D;
+	E = SHA512_INIT_E;
+	F = SHA512_INIT_F;
+	G = SHA512_INIT_G;
+	H = SHA512_INIT_H;
 
 	j = ((keylen+7)/8);
 	for (i = 0; i < j; i++)
@@ -38,14 +38,14 @@ inline void _phs512_preproc(__global const ulong *key, uint keylen,
 
 	SHA512(A, B, C, D, E, F, G, H, W);
 
-	state[0] = A + SHA2_INIT_A;
-	state[1] = B + SHA2_INIT_B;
-	state[2] = C + SHA2_INIT_C;
-	state[3] = D + SHA2_INIT_D;
-	state[4] = E + SHA2_INIT_E;
-	state[5] = F + SHA2_INIT_F;
-	state[6] = G + SHA2_INIT_G;
-	state[7] = H + SHA2_INIT_H;
+	state[0] = A + SHA512_INIT_A;
+	state[1] = B + SHA512_INIT_B;
+	state[2] = C + SHA512_INIT_C;
+	state[3] = D + SHA512_INIT_D;
+	state[4] = E + SHA512_INIT_E;
+	state[5] = F + SHA512_INIT_F;
+	state[6] = G + SHA512_INIT_G;
+	state[7] = H + SHA512_INIT_H;
 }
 
 inline void _phs512_hmac(ulong *output, ulong *ipad_state, ulong *opad_state,

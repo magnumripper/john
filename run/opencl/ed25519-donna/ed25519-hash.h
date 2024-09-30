@@ -17,14 +17,14 @@ ed25519_hash(uint8_t *hash, const uint8_t *in, size_t inlen) {
 	ulong W[16];
 	ulong A, B, C, D, E, F, G, H, t;
 
-	A = SHA2_INIT_A;
-	B = SHA2_INIT_B;
-	C = SHA2_INIT_C;
-	D = SHA2_INIT_D;
-	E = SHA2_INIT_E;
-	F = SHA2_INIT_F;
-	G = SHA2_INIT_G;
-	H = SHA2_INIT_H;
+	A = SHA512_INIT_A;
+	B = SHA512_INIT_B;
+	C = SHA512_INIT_C;
+	D = SHA512_INIT_D;
+	E = SHA512_INIT_E;
+	F = SHA512_INIT_F;
+	G = SHA512_INIT_G;
+	H = SHA512_INIT_H;
 
 	/* Assume inlen is 32 */
 	GET_UINT64BE(W[0], in, 0);
@@ -40,13 +40,13 @@ ed25519_hash(uint8_t *hash, const uint8_t *in, size_t inlen) {
 
 	SHA512_ZEROS(A, B, C, D, E, F, G, H, W);
 
-	PUT_UINT64BE(A + SHA2_INIT_A, hash, 0);
-	PUT_UINT64BE(B + SHA2_INIT_B, hash, 8);
-	PUT_UINT64BE(C + SHA2_INIT_C, hash, 16);
-	PUT_UINT64BE(D + SHA2_INIT_D, hash, 24);
-	PUT_UINT64BE(E + SHA2_INIT_E, hash, 32);
-	PUT_UINT64BE(F + SHA2_INIT_F, hash, 40);
-	PUT_UINT64BE(G + SHA2_INIT_G, hash, 48);
-	PUT_UINT64BE(H + SHA2_INIT_H, hash, 56);
+	PUT_UINT64BE(A + SHA512_INIT_A, hash, 0);
+	PUT_UINT64BE(B + SHA512_INIT_B, hash, 8);
+	PUT_UINT64BE(C + SHA512_INIT_C, hash, 16);
+	PUT_UINT64BE(D + SHA512_INIT_D, hash, 24);
+	PUT_UINT64BE(E + SHA512_INIT_E, hash, 32);
+	PUT_UINT64BE(F + SHA512_INIT_F, hash, 40);
+	PUT_UINT64BE(G + SHA512_INIT_G, hash, 48);
+	PUT_UINT64BE(H + SHA512_INIT_H, hash, 56);
 }
 #endif
