@@ -14,7 +14,6 @@
 #define AMD_PUTCHAR_NOCAST /* AMD bug workaround */
 #endif
 #include "opencl_misc.h"
-#define RC4_IN_PLACE
 #include "opencl_rc4.h"
 #include "opencl_md5.h"
 #include "opencl_sha1.h"
@@ -334,7 +333,8 @@ void oldoffice_md5(const nt_buffer_t *nt_buffer,
 			verifier[i] = cs->verifier[i];
 
 		/* md5 is our key */
-		rc4_oneshot(rc4_ctx, md5, verifier, 32);
+		rc4_128_set_key(rc4_ctx, md5);
+		rc4(rc4_ctx, verifier, verifier, 32);
 
 		for (i = 0; i < 4; i++)
 			W[i] = verifier[i];
@@ -477,7 +477,8 @@ void oldoffice_sha1(const nt_buffer_t *nt_buffer,
 		for (i = 0; i < 32/4; i++)
 			verifier.w[i] = cs->verifier[i];
 
-		rc4_oneshot(rc4_ctx, key, verifier.w, 32);
+		rc4_128_set_key(rc4_ctx, key);
+		rc4(rc4_ctx, verifier.w, verifier.w, 32);
 
 		for (i = 0; i < 4; i++)
 			W[i] = SWAP32(verifier.w[i]);
@@ -516,7 +517,8 @@ void oldoffice_sha1(const nt_buffer_t *nt_buffer,
 			for (i = 0; i < 32/4; i++)
 				verifier.w[i] = cs->extra[i];
 
-			rc4_oneshot(rc4_ctx, key2, verifier.w, 32);
+			rc4_128_set_key(rc4_ctx, key2);
+			rc4(rc4_ctx, verifier.w, verifier.w, 32);
 
 			uint num_zero = 0;
 
@@ -558,10 +560,9 @@ void oldoffice(__global const uchar *password,
                )
 {
 #ifdef RC4_USE_LOCAL
-	__local RC4_CTX rc4_ctx[32];
-#else
-	RC4_CTX rc4_ctx;
+	__local
 #endif
+		RC4_CTX rc4_ctx;
 	nt_buffer_t nt_buffer;
 	uint i;
 	uint gid = get_global_id(0);
@@ -623,19 +624,9 @@ void oldoffice(__global const uchar *password,
 
 		if (cs->type < 3)
 			oldoffice_md5(&nt_buffer, cs, &result[gid * NUM_INT_KEYS + i],
-#ifdef RC4_USE_LOCAL
-			              &rc4_ctx[get_local_id(0)],
-#else
-			              &rc4_ctx,
-#endif
-			              benchmark);
+			              &rc4_ctx, benchmark);
 		else
 			oldoffice_sha1(&nt_buffer, cs, &result[gid * NUM_INT_KEYS + i],
-#ifdef RC4_USE_LOCAL
-			               &rc4_ctx[get_local_id(0)],
-#else
-			               &rc4_ctx,
-#endif
-			               benchmark);
+			               &rc4_ctx, benchmark);
 	}
 }

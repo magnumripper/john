@@ -275,11 +275,9 @@ __kernel void krb5tgs_crypt(__constant krb5tgs_salt *salt,
                             __global krb5tgs_out *out)
 {
 #ifdef RC4_USE_LOCAL
-	__local RC4_CTX rc4_ctx[32];
-#define rc4_ctx	rc4_ctx[get_local_id(0)]
-#else
-	RC4_CTX rc4_ctx;
+	__local
 #endif
+		RC4_CTX rc4_ctx;
 
 	for (uint mask_idx = 0; mask_idx < NUM_INT_KEYS; mask_idx++) {
 		uint gidx = get_global_id(0) * NUM_INT_KEYS + mask_idx;
@@ -324,9 +322,8 @@ __kernel void krb5tgs_crypt(__constant krb5tgs_salt *salt,
 		W[15] = 0;
 		md5_block(uint, W, K3); /* md5_update(inner, 16), md5_final() */
 
-		rc4_set_key(&rc4_ctx, K3);
-
 		uint ddata[(DATA_LEN + 3) / 4];
+		rc4_128_set_key(&rc4_ctx, K3);
 		rc4(&rc4_ctx, salt->edata2, ddata, 20);
 
 		uchar *edata2 = (uchar*)ddata;
