@@ -202,6 +202,9 @@ inline uint funnel_shift_right_imm(uint hi, uint lo, uint s)
 #endif
 #endif
 
+#define block_swap32(W, len)	for (uint i = 0; i < len; i++) W[i] = SWAP32(W[i])
+#define block_swap64(W, len)	for (uint i = 0; i < len; i++) W[i] = SWAP64(W[i])
+
 inline ushort SWAP16(ushort x)
 {
 	return ((x << 8) + (x >> 8));
@@ -348,6 +351,7 @@ inline MAYBE_VECTOR_UINT VSWAP32(MAYBE_VECTOR_UINT x)
 #define GETCHAR_BE(buf, index) (((uchar*)(buf))[(index) ^ 3])
 #define GETCHAR_MC(buf, index) (((MAYBE_CONSTANT uchar*)(buf))[(index)])
 #define LASTCHAR_BE(buf, index, val) (buf)[(index)>>2] = ((buf)[(index)>>2] & (0xffffff00U << ((((index) & 3) ^ 3) << 3))) + ((val) << ((((index) & 3) ^ 3) << 3))
+#define LASTCHAR(buf, index, val) (buf)[(index)>>2] = ((buf)[(index)>>2] & (0xffffff00U << (((index) & 3) << 3))) + ((val) << (((index) & 3) << 3))
 
 #if no_byte_addressable(DEVICE_INFO) || !SCALAR || (gpu_amd(DEVICE_INFO) && defined(AMD_PUTCHAR_NOCAST))
 /* 32-bit stores */
@@ -411,6 +415,18 @@ inline int check_pkcs_pad(const uchar *data, int len, int blocksize)
 		uint _memcpy_c = count; \
 		for (uint _memcpy_i = 0; _memcpy_i < _memcpy_c; _memcpy_i++) \
 			(dst)[_memcpy_i] = (src)[_memcpy_i]; \
+	} while (0)
+
+#define memcpy_macro_SWAP32(dst, src, count) do {	  \
+		uint _memcpy_c = count; \
+		for (uint _memcpy_i = 0; _memcpy_i < _memcpy_c; _memcpy_i++) \
+			(dst)[_memcpy_i] = SWAP32((src)[_memcpy_i]); \
+	} while (0)
+
+#define memcpy_macro_SWAP64(dst, src, count) do {	  \
+		uint _memcpy_c = count; \
+		for (uint _memcpy_i = 0; _memcpy_i < _memcpy_c; _memcpy_i++) \
+			(dst)[_memcpy_i] = SWAP64((src)[_memcpy_i]); \
 	} while (0)
 
 /*
