@@ -201,7 +201,7 @@ void krb5pa_md5_final(const uint *K,
 
 	/* Salts now point to encrypted timestamp. */
 	/* K3 is our RC4 key. */
-	rc4_set_key(rc4_ctx, K3);
+	rc4_128_set_key(rc4_ctx, K3);
 
 	/* First decrypt just one block for early rejection. */
 	rc4(rc4_ctx, salts, plain, 16);
@@ -329,10 +329,10 @@ void cmp(uint gid,
 		cmp_final(gid, iter, hash, offset_table, hash_table, salt, return_hashes, output, bitmap_dupe);
 }
 
-#ifdef RC4_USE_LOCAL
-__attribute__((work_group_size_hint(32,1,1)))
-#endif
 __kernel
+#ifdef RC4_USE_LOCAL
+__attribute__((work_group_size_hint(MAX_LOCAL_RC4, 1, 1)))
+#endif
 void krb5pa_md5(__global const uint *keys,
                 __global const uint *index,
                 MAYBE_CONSTANT uint *salts,
@@ -354,10 +354,9 @@ void krb5pa_md5(__global const uint *keys,
                 volatile __global uint *bitmap_dupe)
 {
 #ifdef RC4_USE_LOCAL
-	__local RC4_CTX rc4_ctx[32];
-#else
-	RC4_CTX rc4_ctx;
+	__local
 #endif
+		RC4_CTX rc4_ctx;
 	uint gid = get_global_id(0);
 	uint base = index[gid];
 	uint len = base & 127;
@@ -427,13 +426,7 @@ void krb5pa_md5(__global const uint *keys,
 		md4_single(uint, nt_buffer, nt_hash);
 
 		/* Final krb5pa-md5 hash */
-		krb5pa_md5_final(nt_hash, salts,
-#ifdef RC4_USE_LOCAL
-		                 &rc4_ctx[get_local_id(0)],
-#else
-		                 &rc4_ctx,
-#endif
-		                 final_hash);
+		krb5pa_md5_final(nt_hash, salts, &rc4_ctx, final_hash);
 
 		/* GPU-side compare */
 		cmp(gid, i, final_hash, bitmaps, bitmap_sz_bits, offset_table,

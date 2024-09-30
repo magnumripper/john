@@ -129,7 +129,10 @@ static const char *warn[] = {
 /* ------- Helper functions ------- */
 static size_t get_task_max_work_group_size()
 {
-	return MIN(autotune_get_task_max_work_group_size(FALSE, 0, crypt_kernel), 32);
+	size_t ls = gpu_amd(device_info[gpu_id]) ? 64 :
+		gpu(device_info[gpu_id]) ? 32 : 1024;
+
+	return MIN(ls, autotune_get_task_max_work_group_size(FALSE, 0, crypt_kernel));
 }
 
 static void release_clobj(void);
@@ -514,16 +517,11 @@ static int salt_compare(const void *x, const void *y)
 static int crypt_all(int *pcount, struct db_salt *salt)
 {
 	int count = *pcount;
-	size_t lws, gws;
 
 	*pcount *= mask_int_cand.num_int_cand;
 
-	/* kernel is made for lws 32, using local memory */
-	lws = local_work_size ? local_work_size : 32;
-
-	/* Don't do more than requested */
-	global_work_size = //count;
-	gws = (count + lws - 1) / lws * lws;
+	size_t lws = local_work_size ? local_work_size : 32;
+	size_t gws = GET_NEXT_MULTIPLE(count, local_work_size);
 
 	//printf("%s(%d) lws "Zu" gws "Zu" kidx %u k %d mult %u\n", __FUNCTION__, count, lws, gws, key_idx, new_keys, mask_int_cand.num_int_cand);
 
@@ -548,7 +546,7 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 
 	BENCH_CLERROR(clEnqueueReadBuffer(queue[gpu_id], cl_salt, CL_TRUE, 0, sizeof(cs), cur_salt, 0, NULL, multi_profilingEvent[3]), "Failed transferring salt");
 
-	WAIT_INIT(global_work_size)
+	WAIT_INIT(gws)
 	BENCH_CLERROR(clFlush(queue[gpu_id]), "clFlush");
 	WAIT_SLEEP
 	BENCH_CLERROR(clFinish(queue[gpu_id]), "clFinish");

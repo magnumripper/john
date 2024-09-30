@@ -77,7 +77,10 @@ static const char *warn[] = {
 /* ------- Helper functions ------- */
 static size_t get_task_max_work_group_size()
 {
-	size_t s = MIN(autotune_get_task_max_work_group_size(FALSE, 0, init_kernel), 32);
+	size_t ls = gpu_amd(device_info[gpu_id]) ? 64 :
+		gpu(device_info[gpu_id]) ? 32 : 1024;
+
+	size_t s = MIN(autotune_get_task_max_work_group_size(FALSE, 0, init_kernel), ls);
 	s = MIN(s, autotune_get_task_max_work_group_size(FALSE, 0, crypt_kernel));
 
 	return s;
@@ -392,9 +395,8 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 {
 	const int count = *pcount;
 
-	/* kernel is made for lws 32, using local memory */
 	size_t lws = local_work_size ? local_work_size : 32;
-	size_t gws = GET_NEXT_MULTIPLE(count, local_work_size);
+	size_t gws = GET_NEXT_MULTIPLE(count, lws);
 
 	*pcount *= mask_int_cand.num_int_cand;
 
