@@ -1,5 +1,5 @@
 /*
- * This software is Copyright (c) 2017 magnum
+ * This software is Copyright (c) 2017-2024 magnum
  * and it is hereby released to the general public under the following terms:
  *
  * Redistribution and use in source and binary forms, with or without
@@ -193,16 +193,29 @@ typedef struct {
 } SHA512_CTX;
 
 inline
+void SHA384_Init(SHA512_CTX *ctx) {
+	ctx->total = 0;
+	ctx->state[0] = SHA384_INIT_A;
+	ctx->state[1] = SHA384_INIT_B;
+	ctx->state[2] = SHA384_INIT_C;
+	ctx->state[3] = SHA384_INIT_D;
+	ctx->state[4] = SHA384_INIT_E;
+	ctx->state[5] = SHA384_INIT_F;
+	ctx->state[6] = SHA384_INIT_G;
+	ctx->state[7] = SHA384_INIT_H;
+}
+
+inline
 void SHA512_Init(SHA512_CTX *ctx) {
 	ctx->total = 0;
-	ctx->state[0] = SHA2_INIT_A;
-	ctx->state[1] = SHA2_INIT_B;
-	ctx->state[2] = SHA2_INIT_C;
-	ctx->state[3] = SHA2_INIT_D;
-	ctx->state[4] = SHA2_INIT_E;
-	ctx->state[5] = SHA2_INIT_F;
-	ctx->state[6] = SHA2_INIT_G;
-	ctx->state[7] = SHA2_INIT_H;
+	ctx->state[0] = SHA512_INIT_A;
+	ctx->state[1] = SHA512_INIT_B;
+	ctx->state[2] = SHA512_INIT_C;
+	ctx->state[3] = SHA512_INIT_D;
+	ctx->state[4] = SHA512_INIT_E;
+	ctx->state[5] = SHA512_INIT_F;
+	ctx->state[6] = SHA512_INIT_G;
+	ctx->state[7] = SHA512_INIT_H;
 }
 
 inline
@@ -304,6 +317,49 @@ void SHA512_Update(SHA512_CTX *ctx, const uchar *input, uint ilen) {
 	if (ilen > 0)
 	{
 		memcpy_pp(ctx->buffer + left, input, ilen);
+	}
+}
+
+#define SHA384_Update(c, i, l)	SHA512_Update(c, i, l)
+
+/*
+ * SHA-384 final digest
+ */
+inline
+void SHA384_Final(uchar output[64], SHA512_CTX *ctx) {
+	uint last, padn;
+	ulong bits;
+	uchar msglen[16];
+	uchar sha384_padding[128] = { 0x80 /* , 0, 0 ... */ };
+
+	bits = ctx->total << 3;
+
+	PUT_UINT64BE(0UL, msglen, 0);
+	PUT_UINT64BE(bits, msglen, 8);
+
+	last = ctx->total & 0x7F;
+	padn = (last < 112) ? (112 - last) : (240 - last);
+
+	SHA512_Update(ctx, sha384_padding, padn);
+	SHA512_Update(ctx, msglen, 16);
+
+#if ALLOW_ALIASING_VIOLATIONS
+	if (!((size_t)output & 0x07)) {
+		PUT_UINT64BE_ALIGNED(ctx->state[0], output,  0);
+		PUT_UINT64BE_ALIGNED(ctx->state[1], output,  8);
+		PUT_UINT64BE_ALIGNED(ctx->state[2], output, 16);
+		PUT_UINT64BE_ALIGNED(ctx->state[3], output, 24);
+		PUT_UINT64BE_ALIGNED(ctx->state[4], output, 32);
+		PUT_UINT64BE_ALIGNED(ctx->state[5], output, 40);
+	} else
+#endif
+	{
+		PUT_UINT64BE(ctx->state[0], output,  0);
+		PUT_UINT64BE(ctx->state[1], output,  8);
+		PUT_UINT64BE(ctx->state[2], output, 16);
+		PUT_UINT64BE(ctx->state[3], output, 24);
+		PUT_UINT64BE(ctx->state[4], output, 32);
+		PUT_UINT64BE(ctx->state[5], output, 40);
 	}
 }
 

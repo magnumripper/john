@@ -1,7 +1,7 @@
 /*
  * This software is
  * Copyright (c) 2013 Lukas Odzioba <ukasz at openwall dot net>
- * Copyright (c) 2014-2018 magnum
+ * Copyright (c) 2014-2024 magnum
  * Copyright (c) 2021 Solar Designer
  * and it is hereby released to the general public under the following terms:
  * Redistribution and use in source and binary forms, with or without
@@ -17,6 +17,10 @@
 
 #ifndef SHA256_DIGEST_LENGTH
 #define SHA256_DIGEST_LENGTH 32
+#endif
+
+#ifndef SHA384_DIGEST_LENGTH
+#define SHA384_DIGEST_LENGTH 48
 #endif
 
 #ifndef SHA512_DIGEST_LENGTH
@@ -498,14 +502,23 @@ __constant ulong K[] = {
 #define sigma1_64(x) (ror64(x, 19) ^ ror64(x, 61) ^ (x >> 6))
 #endif
 
-#define SHA2_INIT_A	0x6a09e667f3bcc908UL
-#define SHA2_INIT_B	0xbb67ae8584caa73bUL
-#define SHA2_INIT_C	0x3c6ef372fe94f82bUL
-#define SHA2_INIT_D	0xa54ff53a5f1d36f1UL
-#define SHA2_INIT_E	0x510e527fade682d1UL
-#define SHA2_INIT_F	0x9b05688c2b3e6c1fUL
-#define SHA2_INIT_G	0x1f83d9abfb41bd6bUL
-#define SHA2_INIT_H	0x5be0cd19137e2179UL
+#define SHA384_INIT_A	0xcbbb9d5dc1059ed8UL
+#define SHA384_INIT_B	0x629a292a367cd507UL
+#define SHA384_INIT_C	0x9159015a3070dd17UL
+#define SHA384_INIT_D	0x152fecd8f70e5939UL
+#define SHA384_INIT_E	0x67332667ffc00b31UL
+#define SHA384_INIT_F	0x8eb44a8768581511UL
+#define SHA384_INIT_G	0xdb0c2e0d64f98fa7UL
+#define SHA384_INIT_H	0x47b5481dbefa4fa4UL
+
+#define SHA512_INIT_A	0x6a09e667f3bcc908UL
+#define SHA512_INIT_B	0xbb67ae8584caa73bUL
+#define SHA512_INIT_C	0x3c6ef372fe94f82bUL
+#define SHA512_INIT_D	0xa54ff53a5f1d36f1UL
+#define SHA512_INIT_E	0x510e527fade682d1UL
+#define SHA512_INIT_F	0x9b05688c2b3e6c1fUL
+#define SHA512_INIT_G	0x1f83d9abfb41bd6bUL
+#define SHA512_INIT_H	0x5be0cd19137e2179UL
 
 #define ROUND512_A(a, b, c, d, e, f, g, h, ki, wi)	\
 	t = (ki) + (wi) + (h) + Sigma1_64(e) + Ch((e), (f), (g)); \
@@ -678,25 +691,25 @@ inline void sha512_single_s(ulong *W, ulong *output)
 {
 	ulong A, B, C, D, E, F, G, H, t;
 
-	A = SHA2_INIT_A;
-	B = SHA2_INIT_B;
-	C = SHA2_INIT_C;
-	D = SHA2_INIT_D;
-	E = SHA2_INIT_E;
-	F = SHA2_INIT_F;
-	G = SHA2_INIT_G;
-	H = SHA2_INIT_H;
+	A = SHA512_INIT_A;
+	B = SHA512_INIT_B;
+	C = SHA512_INIT_C;
+	D = SHA512_INIT_D;
+	E = SHA512_INIT_E;
+	F = SHA512_INIT_F;
+	G = SHA512_INIT_G;
+	H = SHA512_INIT_H;
 
 	SHA512(A, B, C, D, E, F, G, H, W)
 
-	output[0] = A + SHA2_INIT_A;
-	output[1] = B + SHA2_INIT_B;
-	output[2] = C + SHA2_INIT_C;
-	output[3] = D + SHA2_INIT_D;
-	output[4] = E + SHA2_INIT_E;
-	output[5] = F + SHA2_INIT_F;
-	output[6] = G + SHA2_INIT_G;
-	output[7] = H + SHA2_INIT_H;
+	output[0] = A + SHA512_INIT_A;
+	output[1] = B + SHA512_INIT_B;
+	output[2] = C + SHA512_INIT_C;
+	output[3] = D + SHA512_INIT_D;
+	output[4] = E + SHA512_INIT_E;
+	output[5] = F + SHA512_INIT_F;
+	output[6] = G + SHA512_INIT_G;
+	output[7] = H + SHA512_INIT_H;
 }
 #endif
 
@@ -727,25 +740,25 @@ inline void sha512_single(MAYBE_VECTOR_ULONG *W, MAYBE_VECTOR_ULONG *output)
 {
 	MAYBE_VECTOR_ULONG A, B, C, D, E, F, G, H, t;
 
-	A = SHA2_INIT_A;
-	B = SHA2_INIT_B;
-	C = SHA2_INIT_C;
-	D = SHA2_INIT_D;
-	E = SHA2_INIT_E;
-	F = SHA2_INIT_F;
-	G = SHA2_INIT_G;
-	H = SHA2_INIT_H;
+	A = SHA512_INIT_A;
+	B = SHA512_INIT_B;
+	C = SHA512_INIT_C;
+	D = SHA512_INIT_D;
+	E = SHA512_INIT_E;
+	F = SHA512_INIT_F;
+	G = SHA512_INIT_G;
+	H = SHA512_INIT_H;
 
 	SHA512(A, B, C, D, E, F, G, H, W)
 
-	output[0] = A + SHA2_INIT_A;
-	output[1] = B + SHA2_INIT_B;
-	output[2] = C + SHA2_INIT_C;
-	output[3] = D + SHA2_INIT_D;
-	output[4] = E + SHA2_INIT_E;
-	output[5] = F + SHA2_INIT_F;
-	output[6] = G + SHA2_INIT_G;
-	output[7] = H + SHA2_INIT_H;
+	output[0] = A + SHA512_INIT_A;
+	output[1] = B + SHA512_INIT_B;
+	output[2] = C + SHA512_INIT_C;
+	output[3] = D + SHA512_INIT_D;
+	output[4] = E + SHA512_INIT_E;
+	output[5] = F + SHA512_INIT_F;
+	output[6] = G + SHA512_INIT_G;
+	output[7] = H + SHA512_INIT_H;
 }
 
 inline void sha512_single_zeros(MAYBE_VECTOR_ULONG *W,
@@ -753,25 +766,25 @@ inline void sha512_single_zeros(MAYBE_VECTOR_ULONG *W,
 {
 	MAYBE_VECTOR_ULONG A, B, C, D, E, F, G, H, t;
 
-	A = SHA2_INIT_A;
-	B = SHA2_INIT_B;
-	C = SHA2_INIT_C;
-	D = SHA2_INIT_D;
-	E = SHA2_INIT_E;
-	F = SHA2_INIT_F;
-	G = SHA2_INIT_G;
-	H = SHA2_INIT_H;
+	A = SHA512_INIT_A;
+	B = SHA512_INIT_B;
+	C = SHA512_INIT_C;
+	D = SHA512_INIT_D;
+	E = SHA512_INIT_E;
+	F = SHA512_INIT_F;
+	G = SHA512_INIT_G;
+	H = SHA512_INIT_H;
 
 	SHA512_ZEROS(A, B, C, D, E, F, G, H, W)
 
-	output[0] = A + SHA2_INIT_A;
-	output[1] = B + SHA2_INIT_B;
-	output[2] = C + SHA2_INIT_C;
-	output[3] = D + SHA2_INIT_D;
-	output[4] = E + SHA2_INIT_E;
-	output[5] = F + SHA2_INIT_F;
-	output[6] = G + SHA2_INIT_G;
-	output[7] = H + SHA2_INIT_H;
+	output[0] = A + SHA512_INIT_A;
+	output[1] = B + SHA512_INIT_B;
+	output[2] = C + SHA512_INIT_C;
+	output[3] = D + SHA512_INIT_D;
+	output[4] = E + SHA512_INIT_E;
+	output[5] = F + SHA512_INIT_F;
+	output[6] = G + SHA512_INIT_G;
+	output[7] = H + SHA512_INIT_H;
 }
 
 #endif /* _OPENCL_SHA2_H */
